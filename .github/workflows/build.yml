@@ -1,0 +1,88 @@
+name: build-and-release
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, windows-latest, macos-latest ]
+    runs-on: ${{ matrix.os }}
+    env:
+      VERSION: ${{ github.ref_type == 'tag' && github.ref_name || 'dev' }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libjack-jackd2-dev libfreetype-dev libfontconfig1-dev \
+            libx11-dev libxcomposite-dev libxcursor-dev libxext-dev libxinerama-dev libxrandr-dev \
+            libxrender-dev libgl1-mesa-dev
+
+      - name: Configure
+        run: >
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          -DDMT_COPY_AFTER_BUILD=OFF -DDMT_BUILD_TESTS=ON
+          -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Test (pitch detector accuracy)
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Package
+        run: |
+          set -e
+          OUT="DoctorMigranaTuner-${VERSION}-${RUNNER_OS}"
+          ART="build/DoctorMigranaTuner_artefacts/Release"
+          mkdir -p "dist/$OUT"
+          cp -R "$ART/VST3" "dist/$OUT/VST3"
+          cp -R "$ART/Standalone" "dist/$OUT/Standalone"
+          [ -f LICENSE ] || curl -fsSL https://www.gnu.org/licenses/agpl-3.0.txt -o LICENSE
+          cp LICENSE NOTICE.md README.md "dist/$OUT/"
+          cp Assets/ARTWORK.md "dist/$OUT/ARTWORK.md"
+          cd dist
+          cmake -E tar cf "$OUT.zip" --format=zip "$OUT"
+          ls -la
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-${{ runner.os }}
+          path: dist/*.zip
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: package-*
+          path: release
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release/*.zip
+          fail_on_unmatched_files: true
+          generate_release_notes: true
