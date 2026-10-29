@@ -1,0 +1,12 @@
+build/
+cmake-build-*/
+out/
+.vs/
+.vscode/
+.idea/
+*.user
+.DS_Store
+__pycache__/
+*.zip
+*.log
+COMPILAR.txt
